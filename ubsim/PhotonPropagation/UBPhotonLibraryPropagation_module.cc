@@ -90,8 +90,12 @@ phot::UBPhotonLibraryPropagation::UBPhotonLibraryPropagation(fhicl::ParameterSet
   fDoSlowComponent(p.get<bool>("DoSlowComponent")),
   fEDepTags(p.get< std::vector<art::InputTag> >("EDepModuleLabels")),
   fPhotonScale(p.get< std::vector<double> >("PhotonScale", std::vector<double>())),
-  fPhotonEngine(art::ServiceHandle<rndm::NuRandomService>()->createEngine(*this, "HepJamesRandom", "photon",    p, "SeedPhoton")),
-  fScintEngine(art::ServiceHandle<rndm::NuRandomService>()->createEngine(*this, "HepJamesRandom", "scinttime", p, "SeedScintTime"))
+  fPhotonEngine(art::ServiceHandle<rndm::NuRandomService>()
+                ->registerAndSeedEngine(createEngine(0, "HepJamesRandom", "photon"),
+                                        "HepJamesRandom", "photon", p, "SeedPhoton")),
+  fScintEngine(art::ServiceHandle<rndm::NuRandomService>()
+               ->registerAndSeedEngine(createEngine(0, "HepJamesRandom", "scinttime"),
+                                       "HepJamesRandom", "scinttime", p, "SeedScintTime"))
 {
   while(fPhotonScale.size() < fEDepTags.size())
     fPhotonScale.push_back(1.);
@@ -139,6 +143,7 @@ void phot::UBPhotonLibraryPropagation::produce(art::Event & e)
   art::ServiceHandle<PhotonVisibilityService> pvs;
   art::ServiceHandle<sim::LArG4Parameters> lgpHandle;
   const detinfo::LArProperties* larp = lar::providerFrom<detinfo::LArPropertiesService>();
+  auto const detprop = art::ServiceHandle<detinfo::DetectorPropertiesService>()->DataForJob();
   
   art::ServiceHandle<art::RandomNumberGenerator> rng;  
 
@@ -157,10 +162,10 @@ void phot::UBPhotonLibraryPropagation::produce(art::Event & e)
   photon.Energy = 9.7e-6;
   photon.SetInSD = false;
   
-  fISAlg.Initialize(larp,
-		    lar::providerFrom<detinfo::DetectorPropertiesService>(),
-		    &(*lgpHandle),
-		    lar::providerFrom<spacecharge::SpaceChargeService>());
+  //fISAlg.Initialize(larp,
+  //		    lar::providerFrom<detinfo::DetectorPropertiesService>(),
+  //		    &(*lgpHandle),
+  //		    lar::providerFrom<spacecharge::SpaceChargeService>());
 
   std::unique_ptr< std::vector<sim::SimPhotons> > photCol ( new std::vector<sim::SimPhotons>);
   auto & photonCollection(*photCol);
@@ -197,14 +202,15 @@ void phot::UBPhotonLibraryPropagation::produce(art::Event & e)
       
       photon.InitialPosition = TVector3(xyz[0],xyz[1],xyz[2]);
       
-      float const* Visibilities = pvs->GetAllVisibilities(xyz);
+      geo::Point_t pos(xyz[0], xyz[1], xyz[2]);
+      phot::MappedCounts_t Visibilities = pvs->GetAllVisibilities(pos);
       if(!Visibilities)
 	continue;
       
       yieldRatio = GetScintYield(edep,*larp);
-      fISAlg.Reset();
-      fISAlg.CalculateIonizationAndScintillation(edep);
-      nphot =fISAlg.NumberScintillationPhotons();
+      //fISAlg.Reset();
+      larg4::ISCalcData isdata = fISAlg.CalcIonAndScint(detprop, edep);
+      nphot = isdata.numPhotons;
       nphot_fast = yieldRatio*nphot;
 
       photon.Time = edep.T() + GetScintTime(larp->ScintFastTimeConst(),fRiseTimeFast,
